@@ -2,6 +2,13 @@
 #include "minemu/trap.h"
 #include "minemu/trace.h"
 #include "minemu/platform.h"
+#include "minemu/irq.h"
+
+#define UART_BUFFER_SIZE 64
+
+static volatile char uart_buffer[UART_BUFFER_SIZE];
+static volatile uint32_t uart_head = 0;
+static volatile uint32_t uart_tail = 0;
 
 static void uart_putc(char character) {
     while ((MINEMU_UART0->status & MINEMU_UART_STATUS_TX_READY) == 0) {
@@ -17,6 +24,34 @@ static void uart_puts(const char *message) {
     }
 }
 
+static void uart_irq_handler(void) {
+    while (MINEMU_UART0->status & MINEMU_UART_STATUS_RX_READY) {
+        char c = (char)(MINEMU_UART0->rx_data & 0xff);
+
+        uint32_t next = (uart_head + 1) % UART_BUFFER_SIZE;
+
+        if (next != uart_tail) {
+            uart_buffer[uart_head] = c;
+            uart_head = next;
+        }
+
+        uart_putc('.');
+    }
+}
+
+struct minemu_trap_frame *minemu_irq_dispatch(struct minemu_trap_frame *frame) {
+
+    uint32_t source = (uint32_t)frame->exception_id;
+
+    if (source == MINEMU_IRQ_UART0) {
+        uart_irq_handler();
+    }
+
+    MINEMU_INTERRUPT->eoi = source;
+
+    return frame;
+}
+
 void minemu_kernel_main(const struct minemu_boot_info *boot_info) {
     if ((uintptr_t)boot_info != MINEMU_BOOT_INFO_VADDR ||
         boot_info->magic != MINEMU_BOOT_INFO_MAGIC ||
@@ -30,5 +65,16 @@ void minemu_kernel_main(const struct minemu_boot_info *boot_info) {
         minemu_fail_stop();
     }
     uart_puts("hello world\n");
-    minemu_fail_stop();
+
+    MINEMU_INTERRUPT->enable =UINT32_C(1) << MINEMU_IRQ_UART0;
+
+    MINEMU_UART0->control = MINEMU_UART_CONTROL_RX_IRQ_ENABLE;
+
+    minemu_irq_enable();
+
+    for (;;) {
+        __asm__ volatile("nop");
+    }
+
+    // minemu_fail_stop();
 }
