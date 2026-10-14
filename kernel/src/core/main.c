@@ -9,6 +9,7 @@
 #include "minemu/mmu.h"
 #include "minemu/syscall.h"
 #include "minemu/syscall_numbers.h"
+#include "minemu/user_abi.h"
 
 #define UART_BUFFER_SIZE 64
 #define BOOTSTRAP_PAGE_DIRECTORY_PADDR UINT32_C(0x40010000)
@@ -373,7 +374,7 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
     uint32_t instruction =
         *(const uint32_t *)(uintptr_t)frame->fault_pc;
 
-    if (instruction != A32_SVC_ZERO || frame->r[7] != SYS_IOCTL)
+    if (instruction != A32_SVC_ZERO || frame->r[7] != MINEMU_SYS_IOCTL)
     {
         frame->r[0] = (uint32_t)-1;
         return frame;
@@ -384,7 +385,7 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
     uint32_t address = frame->r[2];
     int32_t n = (int32_t)frame->r[3];
 
-    if (fd != IOCTL_UART0 || op != UART_WRITE || n < 0)
+    if (fd != MINEMU_FD_UART_OUT || op != MINEMU_IOCTL_UART_WRITE || n < 0)
     {
         frame->r[0] = (uint32_t)-1;
         return frame;

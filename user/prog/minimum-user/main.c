@@ -1,11 +1,11 @@
-#include <stdint.h>
-#include "minemu/syscall_numbers.h"
+#include "minemu/user_abi.h"
 
 void minemu_user_main(void)
 {
-    char message[] = "Hello world!\n";
-    ioctl(IOCTL_UART0, UART_WRITE,
-          message, (int)(sizeof(message) - 1));
+    char message[] = "hello world\n";
+    ioctl(MINEMU_FD_UART_OUT, MINEMU_IOCTL_UART_WRITE,
+          (void *)message, (uint32_t)(sizeof(message) - 1));
+
     for (;;)
     {
         __asm__ volatile("nop");
