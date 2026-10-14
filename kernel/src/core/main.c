@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include "minemu/mmu.h"
 #include "minemu/syscall.h"
-#include "minemu/syscall_numbers.h"
 #include "minemu/user_abi.h"
 
 #define UART_BUFFER_SIZE 64
@@ -374,7 +373,7 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
     uint32_t instruction =
         *(const uint32_t *)(uintptr_t)frame->fault_pc;
 
-    if (instruction != A32_SVC_ZERO || frame->r[7] != MINEMU_SYS_IOCTL)
+    if (instruction != A32_SVC_ZERO || frame->r[7] != MINEMU_SYSCALL_IOCTL)
     {
         frame->r[0] = (uint32_t)-1;
         return frame;
@@ -452,7 +451,7 @@ struct minemu_trap_frame *minemu_irq_dispatch(struct minemu_trap_frame *frame)
 
 void minemu_kernel_main(const struct minemu_boot_info *boot_info)
 {
-    static const char module_name[] = "user-hello";
+    static const char module_name[] = "minimum-user";
     if ((uintptr_t)boot_info != MINEMU_BOOT_INFO_VADDR ||
         boot_info->magic != MINEMU_BOOT_INFO_MAGIC ||
         boot_info->version != MINEMU_ABI_VERSION || boot_info->size != sizeof(*boot_info) ||
