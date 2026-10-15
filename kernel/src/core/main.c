@@ -10,13 +10,13 @@
 #include "minemu/syscall.h"
 #include "minemu/user_abi.h"
 
-#define UART_BUFFER_SIZE 64
+#define UART_BUFFER_SIZE 256
 #define BOOTSTRAP_PAGE_DIRECTORY_PADDR UINT32_C(0x40010000)
 #define USER_IMAGE_BASE UINT32_C(0x00400000)
 #define USER_STACK_BOTTOM UINT32_C(0x007ff000)
 #define USER_STACK_TOP UINT32_C(0x00800000)
-#define MAX_USER_IMAGE_PAGES 16U
-#define SYSTEM_ROM_TABLE_COUNT 4U
+#define MAX_USER_IMAGE_PAGES 4U
+#define SYSTEM_ROM_TABLE_COUNT 1U
 #define CPSR_MODE_MASK UINT32_C(0x1f)
 #define CPSR_MODE_USR UINT32_C(0x10)
 #define CPSR_THUMB UINT32_C(0x20)
@@ -276,7 +276,6 @@ static bool load_user_module(const struct minemu_boot_info *boot_info,
 
         uint32_t pte_flags = pte_flags_from_segment(segment->flags);
         if (!prepare_user_range(segment->virtual_address, segment->memory_size, pte_flags) ||
-            !write_user_range(segment->virtual_address, NULL, segment->memory_size) ||
             !write_user_range(segment->virtual_address, image + segment->data_offset,
                               segment->file_size))
         {
@@ -394,7 +393,7 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
         else if (op == MINEMU_IOCTL_RNG_STATE ||
                  op == MINEMU_IOCTL_RNG_NEXT)
         {
-            if (!user_range_valid(argument, sizeof(uint32_t),
+            if (!user_range_valid(argument, (uint32_t)n,
                                   MINEMU_PTE_WRITABLE))
             {
                 return frame;
@@ -425,6 +424,41 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
 
         minemu_trace_event(argument);
         frame->r[0] = 0;
+    }
+    else if (fd == MINEMU_FD_UART_IN)
+    {
+        if (op != MINEMU_IOCTL_UART_READ ||
+            n < 0 || n > MINEMU_IOCTL_MAX_TRANSFER)
+        {
+            return frame;
+        }
+
+        if (n == 0)
+        {
+            frame->r[0] = 0;
+            return frame;
+        }
+
+        if (!user_range_valid(argument, (uint32_t)n,
+                              MINEMU_PTE_WRITABLE))
+        {
+            return frame;
+        }
+
+        char *destination = (char *)(uintptr_t)argument;
+        int32_t count = 0;
+
+        minemu_irq_disable();
+
+        while (count < n && uart_head != uart_tail)
+        {
+            destination[count++] = uart_buffer[uart_tail];
+            uart_tail = (uart_tail + 1U) % UART_BUFFER_SIZE;
+        }
+
+        minemu_irq_enable();
+
+        frame->r[0] = (uint32_t)count;
     }
     else if (fd == MINEMU_FD_UART_OUT)
     {
@@ -469,6 +503,7 @@ static void uart_irq_handler(void)
     while (MINEMU_UART0->status & MINEMU_UART_STATUS_RX_READY)
     {
         char c = (char)(MINEMU_UART0->rx_data & 0xff);
+        minemu_trace_event(UINT32_C(0x12345678));
 
         uint32_t next = (uart_head + 1) % UART_BUFFER_SIZE;
 
@@ -517,5 +552,9 @@ void minemu_kernel_main(const struct minemu_boot_info *boot_info)
         minemu_trace_event(UINT32_C(0x48454c02));
         minemu_fail_stop();
     }
+    MINEMU_INTERRUPT->enable = UINT32_C(1) << MINEMU_IRQ_UART0;
+    MINEMU_UART0->control = MINEMU_UART_CONTROL_RX_IRQ_ENABLE;
+    minemu_irq_enable();
+
     minemu_enter_user(module->entry_vaddr, USER_STACK_TOP);
 }

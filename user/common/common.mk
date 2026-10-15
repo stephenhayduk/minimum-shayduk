@@ -16,7 +16,8 @@ USER_LIBRARY_INPUTS := $(wildcard $(USER_DIR)/lib/src/*.c) \
 
 ARCH_FLAGS := -mcpu=cortex-a9 -marm -mfloat-abi=soft
 CPPFLAGS := -I$(USER_DIR)/lib/include -I$(USER_DIR)/../kernel/include
-CFLAGS := $(ARCH_FLAGS) -ffreestanding -fno-builtin -fdata-sections \
+CFLAGS := $(ARCH_FLAGS) \
+	-O2 -ffreestanding -fno-builtin -fdata-sections \
 	-ffunction-sections -fno-stack-protector -std=c11 -Wall -Wextra -Werror -MMD -MP
 ASFLAGS := $(ARCH_FLAGS) -ffreestanding -MMD -MP
 LDFLAGS := $(ARCH_FLAGS) -nostdlib -Wl,-T,$(USER_DIR)/common/user.ld \
