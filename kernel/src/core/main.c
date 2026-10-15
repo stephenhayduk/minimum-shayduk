@@ -21,7 +21,6 @@
 #define CPSR_MODE_USR UINT32_C(0x10)
 #define CPSR_THUMB UINT32_C(0x20)
 #define A32_SVC_ZERO UINT32_C(0xef000000)
-#define TRACE_USER_SYSCALL UINT32_C(0x48454c10)
 
 static uint32_t system_rom_tables[SYSTEM_ROM_TABLE_COUNT][1024]
     __attribute__((aligned(MINEMU_PAGE_SIZE)));
@@ -35,7 +34,6 @@ static size_t user_page_count;
 static volatile char uart_buffer[UART_BUFFER_SIZE];
 static volatile uint32_t uart_head = 0;
 static volatile uint32_t uart_tail = 0;
-static bool user_syscall_observed = false;
 
 void minemu_enter_user(uint32_t entry_vaddr, uint32_t stack_top) __attribute__((noreturn));
 
@@ -357,64 +355,112 @@ struct minemu_trap_frame *minemu_svc_dispatch(struct minemu_trap_frame *frame)
         mode != CPSR_MODE_USR ||
         (frame->spsr & CPSR_THUMB) != 0)
     {
-        frame->r[0] = (uint32_t)-1;
+        frame->r[0] = (uint32_t)MINEMU_IOCTL_ERROR;
         return frame;
     }
 
-    // Validate the instruction address before reading it.
     if ((frame->fault_pc & 3U) != 0 ||
         !user_range_valid(frame->fault_pc, 4U,
                           MINEMU_PTE_READABLE | MINEMU_PTE_EXECUTABLE))
     {
-        frame->r[0] = (uint32_t)-1;
+        frame->r[0] = (uint32_t)MINEMU_IOCTL_ERROR;
         return frame;
     }
 
     uint32_t instruction =
         *(const uint32_t *)(uintptr_t)frame->fault_pc;
 
-    if (instruction != A32_SVC_ZERO || frame->r[7] != MINEMU_SYSCALL_IOCTL)
+    if (instruction != A32_SVC_ZERO ||
+        frame->r[7] != MINEMU_SYSCALL_IOCTL)
     {
-        frame->r[0] = (uint32_t)-1;
+        frame->r[0] = (uint32_t)MINEMU_IOCTL_ERROR;
         return frame;
     }
 
     uint32_t fd = frame->r[0];
     uint32_t op = frame->r[1];
-    uint32_t address = frame->r[2];
+    uint32_t argument = frame->r[2];
     int32_t n = (int32_t)frame->r[3];
 
-    if (fd != MINEMU_FD_UART_OUT || op != MINEMU_IOCTL_UART_WRITE || n < 0)
-    {
-        frame->r[0] = (uint32_t)-1;
-        return frame;
-    }
+    frame->r[0] = (uint32_t)MINEMU_IOCTL_ERROR;
 
-    // Validate the entire buffer before producing any output.
-    if (!user_range_valid(address, (uint32_t)n, MINEMU_PTE_READABLE))
+    if (fd == MINEMU_FD_RNG)
     {
-        frame->r[0] = (uint32_t)-1;
-        return frame;
-    }
-
-    if (!user_syscall_observed)
-    {
-        minemu_trace_event(TRACE_USER_SYSCALL);
-        user_syscall_observed = true;
-    }
-
-    const char *buffer = (const char *)(uintptr_t)address;
-
-    for (int32_t i = 0; i < n; i++)
-    {
-        while ((MINEMU_UART0->status & MINEMU_UART_STATUS_TX_READY) == 0)
+        if (op == MINEMU_IOCTL_RNG_SEED)
         {
+            MINEMU_RNG->seed = argument;
+            frame->r[0] = 0;
+        }
+        else if (op == MINEMU_IOCTL_RNG_STATE ||
+                 op == MINEMU_IOCTL_RNG_NEXT)
+        {
+            if (!user_range_valid(argument, sizeof(uint32_t),
+                                  MINEMU_PTE_WRITABLE))
+            {
+                return frame;
+            }
+            uint32_t value;
+
+            if (op == MINEMU_IOCTL_RNG_STATE)
+            {
+                value = MINEMU_RNG->state;
+            }
+            else
+            {
+                value = MINEMU_RNG->data;
+            }
+
+            copy_bytes((void *)(uintptr_t)argument,
+                       &value, sizeof(value));
+
+            frame->r[0] = 0;
+        }
+    }
+    else if (fd == MINEMU_FD_TRACE)
+    {
+        if (op != MINEMU_IOCTL_TRACE_EVENT)
+        {
+            return frame;
         }
 
-        MINEMU_UART0->tx_data = (uint32_t)(unsigned char)buffer[i];
+        minemu_trace_event(argument);
+        frame->r[0] = 0;
+    }
+    else if (fd == MINEMU_FD_UART_OUT)
+    {
+        if (op != MINEMU_IOCTL_UART_WRITE ||
+            n < 0 || n > MINEMU_IOCTL_MAX_TRANSFER)
+        {
+            return frame;
+        }
+        if (n == 0)
+        {
+            frame->r[0] = 0;
+            return frame;
+        }
+
+        if (!user_range_valid(argument, (uint32_t)n,
+                              MINEMU_PTE_READABLE))
+        {
+            return frame;
+        }
+
+        const unsigned char *buffer =
+            (const unsigned char *)(uintptr_t)argument;
+
+        for (int32_t i = 0; i < n; i++)
+        {
+            while ((MINEMU_UART0->status &
+                    MINEMU_UART_STATUS_TX_READY) == 0)
+            {
+            }
+
+            MINEMU_UART0->tx_data = (uint32_t)buffer[i];
+        }
+
+        frame->r[0] = (uint32_t)n;
     }
 
-    frame->r[0] = (uint32_t)n;
     return frame;
 }
 
